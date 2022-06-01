@@ -25,7 +25,6 @@ export class PaymentController {
     this.messenger = messenger;
   }
 
-  //get a payment by its id
   async getpaymentById(req: Request, res: Response): Promise<void> {
     const { id } = req.params;
     try {
@@ -36,7 +35,6 @@ export class PaymentController {
     }
   }
 
-  //get a payment by its reference
   async getpaymentByRef(req: Request, res: Response): Promise<void> {
     const { reference } = req.params;
     try {
@@ -62,9 +60,10 @@ export class PaymentController {
         message: "Payment was successful",
         data: reference})
     }catch(e){
+      let message  = e.message
       res.json({
         success: false,
-        message: "Payment verification failed",
+        message,
     })
     }
    
@@ -72,69 +71,14 @@ export class PaymentController {
   }
 
   async bankTransfer(req: Request, res: Response) {
-    const reference = ''
     const {acc_name, account_number, bank_code, amount, customerId, name} = req.body
-    const transferID = await this.transferUseCase.createTransfer({amount,customerId, status: Status.PENDING, accName: acc_name, accNo: account_number})
-
-     try{
-      const resolveAccount = await axios
-      .get(`https://api.paystack.co/bank/resolve?account_number=${account_number}&bank_code=${bank_code}`, {
-        headers: {
-          authorization:
-            `Bearer ${process.env.PAYSTACK_SECRET}`,
-          "content-type": "application/json",
-          "cache-control": "no-cache",
-        },
-      })
-      // Account number resolved
-
-      const recipientResponse = await axios.post(
-        `https://api.paystack.co/transferrecipient`,
-        {
-          type: "nuban", 
-          name, 
-          account_number: account_number, 
-          bank_code: bank_code, 
-          currency: "NGN"
-        },
-        {
-          headers: {
-            authorization:
-              `Bearer ${process.env.PAYSTACK_SECRET}`,
-            "content-type": "application/json",
-            "cache-control": "no-cache",
-          },
-        }
-      );
-
-      const recipient_code = recipientResponse.data.data.recipient_code
-      const makeTransfer = await axios.post(
-        `https://api.paystack.co/transfer`,
-        {
-          source: "balance", 
-          amount, 
-          recipient: recipient_code, 
-          reason: "Youstore payment",
-          reference: transferID
-        },
-        {
-          headers: {
-            authorization:
-              `Bearer ${process.env.PAYSTACK_SECRET}`,
-            "content-type": "application/json",
-            "cache-control": "no-cache",
-          },
-        }
-      );
-
-      
-      
-
+    try{
+      const transfer = {amount,customerId, status: Status.PENDING, accName: acc_name, accNo: account_number}
+      const transferID = await this.transferUseCase.createTransfer( transfer, bank_code, name)
       res.status(200).json({message:'transfer successful',data:{reference:transferID}})
     }catch(e){
-      res.status(400).json({message:'transfer failed',data:null})
+      return res.status(400).json({message:'transfer failed',data:null})
     }
-      
   }
 
   async consumePaystackEvent(req: Request, res: Response): Promise<void> {
@@ -160,8 +104,6 @@ export class PaymentController {
               Status.FAILURE
             );
             
-            // this.messenger.assertQueue("payment_failure");
-            // this.messenger.sendToQueue("payment_failure", { ref });
             this.messenger.publishToExchange('paymentEvents', 'payments.status.failed', {
               ref
             })
@@ -174,8 +116,6 @@ export class PaymentController {
               Status.SUCCESS
             );
 
-            // this.messenger.assertQueue("payment_success");
-            // this.messenger.sendToQueue("payment_success", { ref });
             this.messenger.publishToExchange('paymentEvents', 'payments.status.success', {
               ref
             })
@@ -195,7 +135,6 @@ export class PaymentController {
         res.status(200).send({ success: true });
         return
       }else if ((event == "transfer.failed")) {
-        //create a func that does this
         const withdraw = await this.transferUseCase.findByRefAndUpdateStatus(
               ref,
               Status.FAILURE
