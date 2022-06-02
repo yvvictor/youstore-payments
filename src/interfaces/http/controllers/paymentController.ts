@@ -53,7 +53,7 @@ export class PaymentController {
     try{
       const isVerified = await this.paymentUseCase.verifyPayment(reference)
       if(!isVerified){
-        throw Error
+        throw Error('Payment verification failed')
       }
 
       res.json({success: true,
@@ -82,76 +82,16 @@ export class PaymentController {
   }
 
   async consumePaystackEvent(req: Request, res: Response): Promise<void> {
-    const secret = process.env.PAYSTACK_SECRET || "";
-    var hash = crypto
-      .createHmac("sha512", secret)
-      .update(JSON.stringify(req.body))
-      .digest("hex");
-
-    if (hash == req.headers["x-paystack-signature"]) {
-      var { event } = req.body;
-      
-      let ref = req.body.data.reference;
-      
-      try{
-      if ((event == "charge.success")) {
-        
-        
-        const paymentRecord = await this.paymentUseCase.getpaymentByRef(ref);
-          if (paymentRecord.amount != req.body.data.amount) {
-            await this.paymentUseCase.findByRefAndUpdateStatus(
-              ref,
-              Status.FAILURE
-            );
-            
-            this.messenger.publishToExchange('paymentEvents', 'payments.status.failed', {
-              ref
-            })
-            
-            res.status(200).send({ success: true });
-            return
-          } else {
-            await this.paymentUseCase.findByRefAndUpdateStatus(
-              ref,
-              Status.SUCCESS
-            );
-
-            this.messenger.publishToExchange('paymentEvents', 'payments.status.success', {
-              ref
-            })
-            
-            res.status(200).send({ success: true });
-            return
-          }
-        
-      }else if ((event == "transfer.success")) {
-        const withdraw = await this.transferUseCase.findByRefAndUpdateStatus(
-          ref,
-          Status.SUCCESS
-        );
-        this.messenger.assertQueue("withdrawal_success");
-        this.messenger.sendToQueue("withdrawal_success", { withdraw });
-        
-        res.status(200).send({ success: true });
-        return
-      }else if ((event == "transfer.failed")) {
-        const withdraw = await this.transferUseCase.findByRefAndUpdateStatus(
-              ref,
-              Status.FAILURE
-            );
-            this.messenger.assertQueue("withdrawal_failure");
-            this.messenger.sendToQueue("withdrawal_failure", { withdraw });
-            res.status(200).send({ success: true });
-            return
-      }}
-    catch {
+    const {event, data} = req.body   
+    try{
+      const isConsumed = await this.paymentUseCase.consumePaystackEvent({event,data}, req.headers)
+      if(!isConsumed){
+        throw Error
+      }
+      res.status(200).send({ success: true });
+    }catch{
       res.status(400).send({ success: false });
-      return
-    }
-      
-    }
-
-    res.status(400).send({ success: false });
+    } 
   }
 
   
