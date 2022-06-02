@@ -3,15 +3,18 @@ import { IPaymentProps, Payment, Status } from "../domain/payment";
 import { IPayment } from "../infra/database/models/payments";
 import { IMessenger } from "../infra/messaging/messenger";
 import {  Message } from "amqplib";
-
+import TransferUseCase from "./TransferUseCase";
+import crypto from "crypto";
 const axios = require("axios").default;
 export class PaymentUsecase {
   private paymentRepo: IPaymentRepo;
   messenger: IMessenger
+  transferUseCase: TransferUseCase;
 
-  constructor({ payments,  messenger }: { payments: IPaymentRepo, messenger: IMessenger }) {
+  constructor({ payments,  messenger,transferUseCase }: { payments: IPaymentRepo, messenger: IMessenger, transferUseCase: TransferUseCase; }) {
     this.paymentRepo = payments;
     this.messenger = messenger;
+    this.transferUseCase = transferUseCase;
   }
 
   async createPayment(payment: IPaymentProps): Promise<string> {
@@ -117,7 +120,78 @@ export class PaymentUsecase {
     return isVerified
   }
 
-  
+  async consumePaystackEvent(paystackReqBody, headers): Promise<boolean> {
+    const {event, data} = paystackReqBody
+
+    const secret = process.env.PAYSTACK_SECRET || "";
+    var hash = crypto
+      .createHmac("sha512", secret)
+      .update(JSON.stringify(paystackReqBody))
+      .digest("hex");
+
+    if (hash == headers["x-paystack-signature"]) {
+      // var { event } = req.body;
+      
+      let ref = data.reference;
+      
+      try{
+      if ((event == "charge.success")) {
+        
+        
+        const paymentRecord = await this.getpaymentByRef(ref);
+          if (paymentRecord.amount != data.amount) {
+            await this.findByRefAndUpdateStatus(
+              ref,
+              Status.FAILURE
+            );
+            
+            this.messenger.publishToExchange('paymentEvents', 'payments.status.failed', {
+              ref
+            })
+            
+            
+            return true
+          } else {
+            await this.findByRefAndUpdateStatus(
+              ref,
+              Status.SUCCESS
+            );
+
+            this.messenger.publishToExchange('paymentEvents', 'payments.status.success', {
+              ref
+            })
+            
+            return true
+          }
+        
+      }else if ((event == "transfer.success")) {
+        const withdraw = await this.transferUseCase.findByRefAndUpdateStatus(
+          ref,
+          Status.SUCCESS
+        );
+        this.messenger.assertQueue("withdrawal_success");
+        this.messenger.sendToQueue("withdrawal_success", { withdraw });
+        
+      
+         return true
+      }else if ((event == "transfer.failed")) {
+        const withdraw = await this.transferUseCase.findByRefAndUpdateStatus(
+              ref,
+              Status.FAILURE
+            );
+        this.messenger.assertQueue("withdrawal_failure");
+        this.messenger.sendToQueue("withdrawal_failure", { withdraw })
+        return true
+      }}
+    catch {
+    
+      return false
+    }
+      
+    }
+
+    return false
+  }  
 }
 
 export default PaymentUsecase;
